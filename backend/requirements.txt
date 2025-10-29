@@ -3,4 +3,10 @@ uvicorn
 requests
 regex
 pydantic
+sentence-transformers
+scikit-learn
+numpy
+python-decouple
+pytest
+pytest-asyncio
 
