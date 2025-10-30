@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from typing import List, Dict, Any, Optional
 import psutil
 import os
+import json
 
 from models import (
     ChatRequest,
@@ -31,6 +32,18 @@ from rate_limiter import RateLimiter
 from async_security_layers import run_all_security_checks, check_llm_response_async
 from llm_providers import generate_llm_response, is_llm_configured
 from context_manager import ContextManager
+
+# Auto-load API keys from config.json and set as environment variables
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+if os.path.exists(CONFIG_PATH):
+    with open(CONFIG_PATH, "r") as f:
+        _config_data = json.load(f)
+    if "openai_api_key" in _config_data:
+        os.environ["OPENAI_API_KEY"] = _config_data["openai_api_key"]
+    if "anthropic_api_key" in _config_data:
+        os.environ["ANTHROPIC_API_KEY"] = _config_data["anthropic_api_key"]
+    if "google_api_key" in _config_data:
+        os.environ["GOOGLE_API_KEY"] = _config_data["google_api_key"]
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
