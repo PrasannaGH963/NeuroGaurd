@@ -4,23 +4,27 @@ Advanced LLM security middleware with trust scoring, ML detection, and blockchai
 
 ## Features
 
-- **Multi-Layer Security Checks**: Prompt injection, content safety, anomaly detection, context integrity, and response validation
-- **Trust Scoring System**: Adaptive trust scoring based on security layer results and user history
-- **ML-Based Intent Classification**: Uses sentence transformers to detect malicious intents
-- **Rate Limiting**: Sliding window rate limiting per session
-- **Audit Logging**: Immutable, blockchain-inspired audit logs with cryptographic integrity
-- **Configuration Management**: Flexible configuration via JSON or environment variables
+- Multi-layer security (injection, content safety, anomaly/entropy, context, ML intent, response validation)
+- Adaptive trust scoring, user history, rate limit
+- Blockchain-style audit log
+- Async, parallel security checks for speed
+- **Optional: Real LLM provider integration for OpenAI, Anthropic (Claude), Gemini (Google AI)**
+- Fallback to mock LLM responses for all local/offline development by default
 
 ## Setup
 
 ```bash
 cd backend
 python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate  # or .venv\Scripts\activate on Windows
 pip install -r requirements.txt
 ```
 
-**Note**: First run will download the ML model (~80MB). This happens automatically.
+**To enable real LLM completions (OPTIONAL):**
+```bash
+pip install openai anthropic google-generativeai    # only if you want real LLM
+export OPENAI_API_KEY=...                            # or ANTHROPIC_API_KEY, GOOGLE_API_KEY
+```
 
 ## Run
 
@@ -30,167 +34,49 @@ uvicorn app:app --reload
 python app.py
 ```
 
-- API base: `http://localhost:8000`
-- API docs: `http://localhost:8000/docs` (Swagger UI)
-- ReDoc: `http://localhost:8000/redoc`
+- API: http://localhost:8000
+- Docs: http://localhost:8000/docs
+- Dashboard: http://localhost:8000/dashboard (post-Phase 4)
 
-## API Endpoints
+## Real LLM Integration
 
-### Core Endpoints
+- NeuroGuard tries to use the real LLM provider if an API key is set in the environment:
+    - `OPENAI_API_KEY` for OpenAI (gpt-4)
+    - `ANTHROPIC_API_KEY` for Anthropic Claude
+    - `GOOGLE_API_KEY` for Gemini (Google AI)
+- If the key is missing or the package is not installed, it **auto-falls back to fast, safe, local mock responses**.
+- All security checks and logs work the same, LLM just gets smarter.
 
-- `POST /api/chat` → Main chat endpoint with comprehensive security checks
-- `GET /api/config` → Get available LLM providers
-- `GET /api/logs` → Retrieve audit logs (with filtering and pagination)
-
-### Audit & Statistics
-
-- `GET /api/audit/statistics` → Get security statistics
-- `GET /api/audit/verify` → Verify audit log chain integrity
-- `POST /api/audit/export` → Export audit logs as JSON
-
-### Session Management
-
-- `GET /api/session/{session_id}/trust` → Get trust score for a session
-- `GET /api/rate-limit/status?session_id={id}` → Get rate limit status
-
-## Example Request
-
+**Test with real LLM:**
 ```bash
-curl -X POST http://localhost:8000/api/chat \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "prompt": "Explain quantum computing",
-    "provider": "openai",
-    "session_id": "user123"
-  }'
+export OPENAI_API_KEY=your-key
+uvicorn app:app --reload
+# Try: curl -X POST http://localhost:8000/api/chat -H 'Content-Type: application/json' -d '{"prompt":"What is AI?", "provider":"openai"}'
 ```
 
-## Enhanced Response Example
-
-```json
-{
-  "status": "ok",
-  "response": "Secure simulated response",
-  "trust_score": 85,
-  "trust_level": "green",
-  "security_layers": [
-    {
-      "layer": "Prompt Injection",
-      "result": "pass",
-      "details": "OK"
-    },
-    {
-      "layer": "Content Safety",
-      "result": "pass",
-      "details": "OK"
-    },
-    {
-      "layer": "Anomaly Detection",
-      "result": "pass",
-      "details": "OK"
-    },
-    {
-      "layer": "Context Integrity",
-      "result": "pass",
-      "details": "OK"
-    },
-    {
-      "layer": "ML Intent Classification",
-      "result": "pass",
-      "details": "OK"
-    },
-    {
-      "layer": "LLM Response Validation",
-      "result": "pass",
-      "details": "OK"
-    }
-  ],
-  "ml_classification": {
-    "category": "benign",
-    "confidence": 0.92,
-    "is_malicious": false
-  },
-  "session_id": "user123",
-  "log_id": "550e8400-e29b-41d4-a716-446655440000"
-}
-```
-
-## Trust Score Levels
-
-- **Green (80-100)**: Full access, all security checks passed
-- **Yellow (60-79)**: Monitored access with warnings
-- **Orange (40-59)**: Restricted access requiring confirmation
-- **Red (0-39)**: Blocked, request denied
-
-## Configuration
-
-Configuration can be modified via:
-
-1. **config.json** - Edit JSON file directly
-2. **Environment Variables** - Override specific settings:
-   ```bash
-   export TRUST_BASE_SCORE=50
-   export RATE_LIMIT_PER_MINUTE=20
-   export ML_SIMILARITY_THRESHOLD=0.75
-   ```
-
-See `config.py` for all available configuration options.
-
-## Testing
-
+**Test with offline fallback:**
 ```bash
-# Run all tests
-pytest tests/ -v
-
-# Run with coverage
-pytest tests/ --cov=. --cov-report=html
-
-# Run specific test file
-pytest tests/test_security_layers.py -v
+unset OPENAI_API_KEY
+uvicorn app:app --reload
+# Response will always be: [Mock response] This is a simulated secure response to...
 ```
 
-## Security Features
+## Endpoints
 
-### Prompt Injection Detection
-- Pattern-based detection for instruction override attempts
-- System prompt extraction detection
-- Safety bypass attempts
+- `POST /api/chat` - All security checks + LLM (real or mock)
+- `GET /api/config` - Available providers
+- `GET /api/logs` - Audit logs (paging, filters)
+- `GET /api/session/{session_id}/trust` - Trust score, stats
+- ...and more, see API docs
 
-### Content Safety
-- Violence and harmful content detection
-- Credential request detection (API keys, passwords, tokens)
+## To Test
 
-### Anomaly Detection
-- Length validation
-- Special character ratio analysis
-- Unicode/non-ASCII detection
-- Repetition pattern detection
-- Shannon entropy analysis
-- Token stuffing detection
+- Security: Try malicious + benign prompts
+- Performance: See logs for latency improvements from async checks
+- Real LLM: See difference with/without API key
 
-### Response Validation
-- PII detection (email, phone, SSN, credit card)
-- Code injection detection (SQL, JavaScript, shell commands)
-- URL safety checks
-- Echo attack detection
-- JSON structure validation
+## Troubleshooting LLM
+- If real LLM not working, check `pip install` for correct provider and validate your API key (try with the provider's CLI to confirm credentials)
+- All errors and timeouts are logged and safe—system falls back to local mock
 
-### ML Intent Classification
-- Uses `sentence-transformers/all-MiniLM-L6-v2`
-- Categories: benign, probing, exploitation, exfiltration
-- Similarity matching against known attack patterns
-
-## Architecture
-
-See `ARCHITECTURE.md` for detailed system architecture documentation.
-
-## Performance
-
-- Average request processing: <500ms
-- ML model loads once at startup
-- Efficient caching for repeated computations
-- In-memory storage (configurable limits)
-
-## License
-
-MIT License
+## Advanced usage, monitoring, dashboard: see full instructions below (Phase 4/5/6...)

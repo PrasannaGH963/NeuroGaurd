@@ -5,7 +5,8 @@ Detects malicious intents through embedding similarity.
 import logging
 from typing import Dict, List, Tuple, Optional
 import numpy as np
-from functools import lru_cache
+from threading import Lock
+#from functools import lru_cache  # REMOVE this
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -22,6 +23,7 @@ class IntentClassifier:
     """
     Classifies prompts using sentence transformer embeddings.
     Detects similar attack patterns through cosine similarity.
+    Adds thread-safe embedding cache for concurrency.
     """
     
     def __init__(self):
@@ -31,6 +33,13 @@ class IntentClassifier:
         self.attack_patterns: Dict[str, List[str]] = {}
         self.attack_embeddings: Optional[np.ndarray] = None
         self.pattern_list: List[Tuple[str, str]] = []  # (category, pattern)
+        
+        # Thread-safe manual embedding cache
+        self._cache_lock = Lock()
+        self._embedding_cache: Dict[str, np.ndarray] = {}
+        self._cache_hits = 0
+        self._cache_misses = 0
+        self._cache_size = 1000
         
         if ML_AVAILABLE:
             try:
@@ -119,25 +128,53 @@ class IntentClassifier:
         embeddings = self.model.encode(patterns_text, show_progress_bar=False)
         return np.array(embeddings)
     
-    @lru_cache(maxsize=1000)
     def _compute_embedding_cached(self, text: str) -> Optional[np.ndarray]:
         """
-        Compute embedding for text with caching.
-        
-        Args:
-            text: Input text
-            
-        Returns:
-            Embedding vector or None if ML unavailable
+        Thread-safe embedding computation with caching.
         """
         if not self.model:
             return None
+
+        # Look up in cache (lock)
+        with self._cache_lock:
+            if text in self._embedding_cache:
+                self._cache_hits += 1
+                return self._embedding_cache[text].copy()  # Return a copy to avoid shared mutation
+            self._cache_misses += 1
+        # Compute outside lock for efficiency
         try:
-            embedding = self.model.encode([text], show_progress_bar=False)
-            return embedding[0]
+            embedding = self.model.encode([text], show_progress_bar=False)[0]
         except Exception as e:
             logging.error(f"Error computing embedding: {e}")
             return None
+
+        # Insert in cache (lock)
+        with self._cache_lock:
+            if len(self._embedding_cache) >= self._cache_size:
+                # Remove least recently used (FIFO policy)
+                oldest_key = next(iter(self._embedding_cache))
+                del self._embedding_cache[oldest_key]
+            self._embedding_cache[text] = embedding
+        return embedding
+
+    def get_cache_stats(self) -> Dict[str, any]:
+        """Get cache performance statistics."""
+        with self._cache_lock:
+            total_requests = self._cache_hits + self._cache_misses
+            hit_rate = (self._cache_hits / total_requests * 100) if total_requests > 0 else 0.0
+            return {
+                'cache_size': len(self._embedding_cache),
+                'cache_hits': self._cache_hits,
+                'cache_misses': self._cache_misses,
+                'hit_rate_percent': round(hit_rate, 2),
+                'total_requests': total_requests
+            }
+
+    def clear_cache(self):
+        with self._cache_lock:
+            self._embedding_cache.clear()
+            self._cache_hits = 0
+            self._cache_misses = 0
     
     def classify_intent(self, prompt: str) -> Tuple[str, float, bool]:
         """

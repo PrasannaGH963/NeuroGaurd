@@ -1,12 +1,16 @@
 """
 Configuration management for NeuroGuard security system.
 Supports environment variables and JSON configuration files.
+Thread-safe singleton with validation.
 """
 import json
 import os
 from dataclasses import dataclass, asdict
-from typing import Optional
+from typing import Optional, List
+from threading import RLock
 
+_config: Optional['SecurityConfig'] = None
+_config_lock = RLock()  # Reentrant lock
 
 @dataclass
 class SecurityConfig:
@@ -66,9 +70,32 @@ class SecurityConfig:
         with open(filepath, 'w') as f:
             json.dump(self.to_dict(), f, indent=2)
     
+    def validate(self) -> List[str]:
+        """Validate configuration values, return list of issues."""
+        errors = []
+        if not (0 <= self.base_trust_score <= 100):
+            errors.append("base_trust_score must be between 0 and 100")
+        if self.trust_threshold_orange >= self.trust_threshold_yellow:
+            errors.append("trust_threshold_orange must be less than trust_threshold_yellow")
+        if self.trust_threshold_yellow >= self.trust_threshold_green:
+            errors.append("trust_threshold_yellow must be less than trust_threshold_green")
+        if self.rate_limit_per_minute <= 0 or self.rate_limit_per_hour <= 0:
+            errors.append("Rate limits must be positive")
+        if self.rate_limit_per_minute > self.rate_limit_per_hour:
+            errors.append("per_minute limit cannot exceed per_hour limit")
+        total_weight = sum([
+            self.layer_weight_prompt_injection,
+            self.layer_weight_content_safety,
+            self.layer_weight_anomaly_detection,
+            self.layer_weight_context_integrity,
+            self.layer_weight_response_validation
+        ])
+        if not (0.95 <= total_weight <= 1.05):
+            errors.append(f"Layer weights should sum to ~1.0 (currently {total_weight:.2f})")
+        return errors
+    
     @classmethod
     def load_from_file(cls, filepath: str = "config.json") -> 'SecurityConfig':
-        """Load configuration from JSON file."""
         if os.path.exists(filepath):
             with open(filepath, 'r') as f:
                 data = json.load(f)
@@ -77,46 +104,46 @@ class SecurityConfig:
     
     @classmethod
     def load_from_env(cls) -> 'SecurityConfig':
-        """Load configuration from environment variables."""
         config = cls()
-        
-        # Trust scoring
         config.base_trust_score = int(os.getenv('TRUST_BASE_SCORE', config.base_trust_score))
         config.trust_threshold_green = int(os.getenv('TRUST_THRESHOLD_GREEN', config.trust_threshold_green))
         config.trust_threshold_yellow = int(os.getenv('TRUST_THRESHOLD_YELLOW', config.trust_threshold_yellow))
         config.trust_threshold_orange = int(os.getenv('TRUST_THRESHOLD_ORANGE', config.trust_threshold_orange))
-        
-        # Rate limiting
         config.rate_limit_per_minute = int(os.getenv('RATE_LIMIT_PER_MINUTE', config.rate_limit_per_minute))
         config.rate_limit_per_hour = int(os.getenv('RATE_LIMIT_PER_HOUR', config.rate_limit_per_hour))
-        
-        # ML detection
         config.ml_similarity_threshold = float(os.getenv('ML_SIMILARITY_THRESHOLD', config.ml_similarity_threshold))
         config.ml_model_name = os.getenv('ML_MODEL_NAME', config.ml_model_name)
-        
         return config
 
 
-# Global config instance
-_config: Optional[SecurityConfig] = None
-
-
 def get_config() -> SecurityConfig:
-    """Get or create global configuration instance."""
+    """Get or create global configuration instance (thread-safe)."""
     global _config
-    if _config is None:
-        # Try loading from file first, then env, then default
-        if os.path.exists('config.json'):
-            _config = SecurityConfig.load_from_file()
-        else:
-            _config = SecurityConfig.load_from_env()
-            _config.save_to_file()  # Save defaults for easy editing
-    return _config
+    with _config_lock:
+        if _config is None:
+            if os.path.exists('config.json'):
+                _config = SecurityConfig.load_from_file()
+            else:
+                _config = SecurityConfig.load_from_env()
+                _config.save_to_file()
+            # Validate
+            errors = _config.validate()
+            if errors:
+                print("WARNING: Configuration validation errors:")
+                for error in errors:
+                    print(f"  - {error}")
+        return _config
 
-
-def reload_config():
-    """Reload configuration from file or environment."""
+def reload_config() -> SecurityConfig:
+    """Reload configuration from file or environment (thread-safe)."""
     global _config
-    _config = None
-    return get_config()
+    with _config_lock:
+        _config = None
+        return get_config()
+
+def get_config_snapshot() -> dict:
+    """Get immutable snapshot of current configuration."""
+    with _config_lock:
+        config = get_config()
+        return config.to_dict()
 

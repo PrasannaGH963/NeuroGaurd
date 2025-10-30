@@ -9,4 +9,9 @@ numpy
 python-decouple
 pytest
 pytest-asyncio
+psutil
+# --- OPTIONAL: Real LLM provider integration ---
+# openai>=1.0.0
+# anthropic>=0.18.0
+# google-generativeai>=0.3.0
 

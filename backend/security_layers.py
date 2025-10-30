@@ -5,43 +5,79 @@ from typing import Tuple, Optional
 from collections import Counter
 from config import get_config
 
+# ===== PRE-COMPILED REGEX PATTERNS =====
+
+# Prompt Injection
+INJECTION_PATTERNS = [
+    re.compile(r"ignore (all|any|previous|prior) instructions?", re.IGNORECASE),
+    re.compile(r"disregard previous", re.IGNORECASE),
+    re.compile(r"forget (you are|that you are|everything)", re.IGNORECASE),
+    re.compile(r"pretend (you are|that you are)", re.IGNORECASE),
+    re.compile(r"act as (if|though)", re.IGNORECASE),
+    re.compile(r"roleplay as", re.IGNORECASE),
+    re.compile(r"reveal (your )?(system|hidden|secret|internal) prompt", re.IGNORECASE),
+    re.compile(r"(show|tell|give|provide|return) (me |us )?(the |your )?(system|hidden|secret|internal|original) prompt", re.IGNORECASE),
+    re.compile(r"what (are |were |is )?(your )?(initial|system) instructions?", re.IGNORECASE),
+    re.compile(r"override (safety|security|protections?)", re.IGNORECASE),
+    re.compile(r"ignore (safety|security) (rules?|protections?|guidelines?)", re.IGNORECASE),
+    re.compile(r"bypass (safety|security|protections?)", re.IGNORECASE),
+    re.compile(r"disable (safety|security|protections?)", re.IGNORECASE),
+    re.compile(r"forget (safety|security) (rules?|protections?|guidelines?)", re.IGNORECASE),
+    re.compile(r"ignore any (safety|security) rules?", re.IGNORECASE),
+    re.compile(r"(you are|you're) (now|a|an) (system admin|administrator|different model|another model)", re.IGNORECASE),
+    re.compile(r"(you are|you're) (a|an) (different|another) model", re.IGNORECASE),
+    re.compile(r"(you are|you're) no longer", re.IGNORECASE),
+    re.compile(r"you must ignore", re.IGNORECASE),
+    re.compile(r"(return|give|provide|show|tell|reveal) (me |us )?(the |your )?(original|training|source) data", re.IGNORECASE),
+    re.compile(r"(return|give|provide|show|tell|reveal) (me |us )?(the |your )?training (data|set|examples?)", re.IGNORECASE),
+]
+
+# Credential Patterns
+CREDENTIAL_PATTERNS = [
+    re.compile(r"\bapi keys?\b", re.IGNORECASE),
+    re.compile(r"(give|provide|show|tell|reveal|share|send) (me |us )?(some |any |your |the )?(api|access) (key|keys|token|tokens|credentials?)", re.IGNORECASE),
+    re.compile(r"(give|provide|show|tell|reveal|share|send) (me |us )?(your |the )?(password|passwords?|secret|secrets?|credential|credentials?)", re.IGNORECASE),
+    re.compile(r"(give|provide|show|tell|reveal|share|send) (me |us )?(your |the )?(authentication|auth) (token|tokens?|key|keys?)", re.IGNORECASE),
+]
+
+# Context Poisoning Patterns
+CONTEXT_POISON_PATTERNS = [
+    re.compile(r"this is a test", re.IGNORECASE),
+    re.compile(r"ignore the above", re.IGNORECASE),
+    re.compile(r"forget everything", re.IGNORECASE),
+]
+
+# PII Patterns
+PII_PATTERNS = {
+    'email': re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'),
+    'phone_us': re.compile(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b'),
+    'ssn': re.compile(r'\b\d{3}-\d{2}-\d{4}\b'),
+    'credit_card': re.compile(r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b'),
+}
+
+# Code Injection Patterns
+CODE_INJECTION_PATTERNS = [
+    (re.compile(r'<script[^>]*>.*?</script>', re.IGNORECASE | re.DOTALL), 'JavaScript injection'),
+    (re.compile(r'<iframe[^>]*>', re.IGNORECASE), 'iframe injection'),
+    (re.compile(r'DROP\s+TABLE', re.IGNORECASE), 'SQL injection (DROP TABLE)'),
+    (re.compile(r'DELETE\s+FROM', re.IGNORECASE), 'SQL injection (DELETE)'),
+    (re.compile(r'SELECT\s+\*\s+FROM', re.IGNORECASE), 'SQL injection (SELECT)'),
+    (re.compile(r';\s*rm\s+-rf', re.IGNORECASE), 'Shell command injection'),
+    (re.compile(r'eval\s*\(', re.IGNORECASE), 'JavaScript eval'),
+    (re.compile(r'exec\s*\(', re.IGNORECASE), 'Python exec'),
+    (re.compile(r'__import__\s*\(', re.IGNORECASE), 'Python import'),
+    (re.compile(r'document\.cookie', re.IGNORECASE), 'Cookie access attempt'),
+    (re.compile(r'window\.location', re.IGNORECASE), 'Location manipulation'),
+]
+
+# URL pattern
+URL_PATTERN = re.compile(r'https?://[^\s<>"\'\)]+')
+
 
 def check_prompt_injection(prompt: str) -> Tuple[bool, str]:
     lowered = prompt.lower()
-    injection_patterns = [
-        # Direct instruction override attempts
-        r"ignore (all|any|previous|prior) instructions?",
-        r"disregard previous",
-        r"forget (you are|that you are|everything)",
-        r"pretend (you are|that you are)",
-        r"act as (if|though)",
-        r"roleplay as",
-        
-        # System prompt extraction attempts
-        r"reveal (your )?(system|hidden|secret|internal) prompt",
-        r"(show|tell|give|provide|return) (me |us )?(the |your )?(system|hidden|secret|internal|original) prompt",
-        r"what (are |were |is )?(your )?(initial|system) instructions?",
-        
-        # Safety bypass attempts
-        r"override (safety|security|protections?)",
-        r"ignore (safety|security) (rules?|protections?|guidelines?)",
-        r"bypass (safety|security|protections?)",
-        r"disable (safety|security|protections?)",
-        r"forget (safety|security) (rules?|protections?|guidelines?)",
-        r"ignore any (safety|security) rules?",
-        
-        # Model/identity manipulation
-        r"(you are|you're) (now|a|an) (system admin|administrator|different model|another model)",
-        r"(you are|you're) (a|an) (different|another) model",
-        r"(you are|you're) no longer",
-        r"you must ignore",
-        
-        # Training data extraction
-        r"(return|give|provide|show|tell|reveal) (me |us )?(the |your )?(original|training|source) data",
-        r"(return|give|provide|show|tell|reveal) (me |us )?(the |your )?training (data|set|examples?)",
-    ]
-    for pattern in injection_patterns:
-        if re.search(pattern, lowered, re.IGNORECASE):
+    for pattern in INJECTION_PATTERNS:
+        if pattern.search(lowered):
             return False, "Potential prompt injection detected."
     return True, "OK"
 
@@ -58,14 +94,8 @@ def check_content_safety(prompt: str) -> Tuple[bool, str]:
         return False, "Content safety policy triggered."
     
     # Credential and sensitive data requests
-    credential_patterns = [
-        r"\bapi keys?\b",
-        r"(give|provide|show|tell|reveal|share|send) (me |us )?(some |any |your |the )?(api|access) (key|keys|token|tokens|credentials?)",
-        r"(give|provide|show|tell|reveal|share|send) (me |us )?(your |the )?(password|passwords?|secret|secrets?|credential|credentials?)",
-        r"(give|provide|show|tell|reveal|share|send) (me |us )?(your |the )?(authentication|auth) (token|tokens?|key|keys?)",
-    ]
-    for pattern in credential_patterns:
-        if re.search(pattern, lowered, re.IGNORECASE):
+    for pattern in CREDENTIAL_PATTERNS:
+        if pattern.search(lowered):
             return False, "Content safety policy triggered: Credential request detected."
     
     return True, "OK"
@@ -166,15 +196,8 @@ def check_context_integrity(prompt: str) -> Tuple[bool, str]:
         return False, "Empty context"
     
     # Check for context poisoning attempts
-    context_poison_patterns = [
-        r"this is a test",
-        r"ignore the above",
-        r"forget everything",
-    ]
-    
-    lowered = prompt.lower()
-    for pattern in context_poison_patterns:
-        if re.search(pattern, lowered):
+    for pattern in CONTEXT_POISON_PATTERNS:
+        if pattern.search(prompt.lower()):
             return False, "Context integrity violation detected"
     
     return True, "OK"
@@ -200,39 +223,17 @@ def check_llm_response(response: str, original_prompt: str = "") -> Tuple[bool, 
         pass
     
     # PII Detection patterns
-    pii_patterns = {
-        'email': r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-        'phone_us': r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b',
-        'ssn': r'\b\d{3}-\d{2}-\d{4}\b',
-        'credit_card': r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b'
-    }
-    
-    for pii_type, pattern in pii_patterns.items():
-        if re.search(pattern, response):
+    for pii_type, pattern in PII_PATTERNS.items():
+        if pattern.search(response):
             return False, f"PII detected in response: {pii_type}"
     
     # Code injection detection
-    code_patterns = [
-        (r'<script[^>]*>.*?</script>', 'JavaScript injection'),
-        (r'<iframe[^>]*>', 'iframe injection'),
-        (r'DROP\s+TABLE', 'SQL injection (DROP TABLE)'),
-        (r'DELETE\s+FROM', 'SQL injection (DELETE)'),
-        (r'SELECT\s+\*\s+FROM', 'SQL injection (SELECT)'),
-        (r';\s*rm\s+-rf', 'Shell command injection'),
-        (r'eval\s*\(', 'JavaScript eval'),
-        (r'exec\s*\(', 'Python exec'),
-        (r'__import__\s*\(', 'Python import'),
-        (r'document\.cookie', 'Cookie access attempt'),
-        (r'window\.location', 'Location manipulation')
-    ]
-    
-    for pattern, description in code_patterns:
-        if re.search(pattern, response, re.IGNORECASE | re.DOTALL):
+    for pattern, description in CODE_INJECTION_PATTERNS:
+        if pattern.search(response, re.IGNORECASE | re.DOTALL):
             return False, f"Potential code injection in response: {description}"
     
     # URL safety check
-    url_pattern = r'https?://[^\s<>"\'\)]+'
-    urls = re.findall(url_pattern, response, re.IGNORECASE)
+    urls = URL_PATTERN.findall(response, re.IGNORECASE)
     dangerous_extensions = ['.exe', '.scr', '.bat', '.cmd', '.zip', '.rar', '.7z', '.dmg', '.pkg']
     suspicious_tlds = ['.tk', '.ml', '.ga', '.cf', '.gq']  # Free hosting services often used for malware
     
