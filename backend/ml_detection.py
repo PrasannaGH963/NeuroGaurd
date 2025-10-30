@@ -7,6 +7,8 @@ from typing import Dict, List, Tuple, Optional
 import numpy as np
 from threading import Lock
 #from functools import lru_cache  # REMOVE this
+import json
+import os
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -18,6 +20,7 @@ except ImportError:
 
 from config import get_config
 
+ATTACK_PATTERN_PATH = os.path.join(os.path.dirname(__file__), 'attack_patterns.json')
 
 class IntentClassifier:
     """
@@ -41,10 +44,12 @@ class IntentClassifier:
         self._cache_misses = 0
         self._cache_size = 1000
         
+        # Load ML if available
         if ML_AVAILABLE:
             try:
                 self.model = SentenceTransformer(self.config.ml_model_name)
                 self.attack_patterns = self._load_attack_patterns()
+                self._load_persisted_patterns()  # NEW: load from disk
                 self.attack_embeddings = self._compute_embeddings()
                 logging.info(f"ML Intent Classifier initialized with {len(self.pattern_list)} attack patterns")
             except Exception as e:
@@ -284,6 +289,57 @@ class IntentClassifier:
         except Exception as e:
             logging.error(f"Error in find_similar_attacks: {e}")
             return []
+
+    def _load_persisted_patterns(self):
+        """
+        Load any learned/blocked patterns from disk (attack_patterns.json), merge with core patterns.
+        """
+        if not os.path.exists(ATTACK_PATTERN_PATH):
+            return
+        try:
+            with open(ATTACK_PATTERN_PATH, 'r') as f:
+                persistent = json.load(f)
+            for cat, patterns in persistent.items():
+                if cat in self.attack_patterns:
+                    for pat in patterns:
+                        if pat not in self.attack_patterns[cat]:
+                            self.attack_patterns[cat].append(pat)
+                else:
+                    self.attack_patterns[cat] = patterns[:]
+        except Exception as e:
+            logging.warning(f"Could not load persisted attack patterns: {e}")
+
+    def _persist_patterns(self):
+        """
+        Write currently learned/blocked patterns to attack_patterns.json for persistency.
+        """
+        try:
+            with open(ATTACK_PATTERN_PATH, 'w') as f:
+                json.dump(self.attack_patterns, f, indent=2)
+        except Exception as e:
+            logging.warning(f"Could not persist attack patterns: {e}")
+
+    def learn_from_blocked(self, prompt: str, category: str, confidence: float):
+        """
+        Add a blocked prompt pattern to appropriate attack category and recompute embeddings if novel.
+        """
+        if not self._is_novel_pattern(prompt, category):
+            return  # Only add unique
+        self.attack_patterns.setdefault(category, []).append(prompt)
+        self._persist_patterns()
+        # Recompute embeddings (model must be loaded)
+        if self.model:
+            self.attack_embeddings = self._compute_embeddings()
+            logging.info(f"Learned new pattern (blocked): [{category}] {prompt[:60]}... Total: {len(self.pattern_list)}")
+
+    def _is_novel_pattern(self, prompt: str, category: str) -> bool:
+        """
+        Check if this prompt exists in the current attack patterns for the category.
+        """
+        for p in self.attack_patterns.get(category, []):
+            if prompt.strip().lower() == p.strip().lower():
+                return False
+        return True
 
 
 def check_ml_intent(prompt: str, classifier: Optional[IntentClassifier] = None) -> Tuple[bool, str, dict]:

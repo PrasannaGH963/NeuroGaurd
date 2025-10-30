@@ -30,6 +30,7 @@ from audit_logger import AuditLogger
 from rate_limiter import RateLimiter
 from async_security_layers import run_all_security_checks, check_llm_response_async
 from llm_providers import generate_llm_response, is_llm_configured
+from context_manager import ContextManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -55,6 +56,7 @@ trust_engine = TrustScoreEngine()
 intent_classifier = IntentClassifier()
 audit_logger = AuditLogger()
 rate_limiter = RateLimiter()
+context_manager = ContextManager(classifier=intent_classifier)
 
 logger.info("NeuroGuard initialized with all security components")
 
@@ -212,6 +214,19 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
                 trust_engine.update_history(session_id, False)
             else:
                 trust_engine.update_history(session_id, True)
+
+    # After generating response_text, if status=='ok' or status=='warning', update context session
+    if response_text and status in ["ok", "warning", "alert"]:
+        context_manager.add_turn(
+            session_id=session_id,
+            prompt=prompt,
+            response=response_text,
+            metadata={'trust_score': trust_score, 'trust_level': trust_level}
+        )
+        # Detect topic drift
+        is_drift, similarity = context_manager.detect_topic_drift(session_id, prompt)
+        if is_drift:
+            warnings.append(f"Significant topic change detected in this session (similarity: {similarity:.2f})")
 
     # Calculate latency
     latency_ms = int((time.time() - start_time) * 1000)
@@ -491,7 +506,7 @@ async def dashboard():
         updateDashboard();
         setInterval(updateDashboard, 2000);
     </script>
-    </body></html>''
+    </body></html>'''
 
 
 if __name__ == "__main__":
