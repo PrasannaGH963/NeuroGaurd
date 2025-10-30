@@ -8,7 +8,7 @@ import logging
 import asyncio
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from typing import List, Dict, Any, Optional
 import psutil
 import os
@@ -32,6 +32,7 @@ from rate_limiter import RateLimiter
 from async_security_layers import run_all_security_checks, check_llm_response_async
 from llm_providers import generate_llm_response, is_llm_configured
 from context_manager import ContextManager
+import google.generativeai as genai
 
 # Auto-load API keys from config.json and set as environment variables
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
@@ -81,7 +82,8 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
     """
     start_time = time.time()
     prompt = payload.prompt
-    provider = payload.provider
+    provider = (payload.provider or '').lower()
+    logger.info(f"/api/chat received provider: '{provider}'")
     
     # Generate or use provided session ID
     session_id = payload.session_id or str(uuid.uuid4())
@@ -204,14 +206,15 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
     # If allowed, process LLM call
     if action in ['allow', 'warn', 'restrict']:
         try:
+            logger.info(f"Checking if provider '{provider}' is configured...")
             if is_llm_configured(provider):
-                # Use real LLM if API key/configured
+                logger.info(f"Provider '{provider}' is configured, attempting real LLM call...")
                 response_text = await generate_llm_response(prompt, provider, timeout=30)
             else:
-                # Fallback to mock
+                logger.info(f"Provider '{provider}' not configured (falling back to mock)")
                 response_text = await asyncio.to_thread(mock_llm_call, prompt=prompt, provider=provider)
         except Exception as llm_exc:
-            logger.error(f"LLM generation error: {llm_exc}")
+            logger.error(f"LLM generation error (outer): {llm_exc}")
             status = "blocked"
             reason = f"LLM generation failed: {str(llm_exc)}"
             response_text = None
@@ -520,6 +523,19 @@ async def dashboard():
         setInterval(updateDashboard, 2000);
     </script>
     </body></html>'''
+
+
+@app.get("/api/gemini/models")
+def list_gemini_models():
+    try:
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            return JSONResponse({"error": "No GOOGLE_API_KEY set"}, status_code=400)
+        genai.configure(api_key=api_key)
+        models = genai.list_models()
+        return JSONResponse({"models": [m.name for m in models]})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 if __name__ == "__main__":

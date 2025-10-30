@@ -46,9 +46,18 @@ export default function App() {
       })
 
       if (data.status === 'ok') {
-        setMessages(prev => [...prev, { role: 'assistant', content: data.response, status: 'ok', logs: data.logs }])
+        setMessages(prev => [...prev, { role: 'assistant', content: data.response, status: 'ok', logs: data.security_layers || [] }])
       } else {
-        setMessages(prev => [...prev, { role: 'system', content: data.reason || 'Alert triggered', status: 'alert', logs: data.logs }])
+        // Compose a detailed alert reason including failing security layers
+        let alertDetails = data.reason || 'Alert triggered'
+        if (Array.isArray(data.security_layers)) {
+          const failedLayers = data.security_layers.filter(l => l.result !== 'pass')
+          if (failedLayers.length) {
+            alertDetails += '\n\nTriggered Layers:'
+            alertDetails += '\n' + failedLayers.map(l => `- [${l.layer}]: ${l.details}`).join('\n')
+          }
+        }
+        setMessages(prev => [...prev, { role: 'system', content: alertDetails, status: 'alert', logs: data.security_layers || [] }])
       }
     } catch (e) {
       setMessages(prev => [...prev, { role: 'system', content: 'Network error contacting backend', status: 'alert' }])

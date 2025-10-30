@@ -99,7 +99,10 @@ class SecurityConfig:
         if os.path.exists(filepath):
             with open(filepath, 'r') as f:
                 data = json.load(f)
-            return cls(**data)
+            # Only keep keys present in dataclass (ignore API keys/extras)
+            valid_keys = {field for field in cls.__dataclass_fields__}
+            filtered_data = {k: v for k, v in data.items() if k in valid_keys}
+            return cls(**filtered_data)
         return cls()
     
     @classmethod

@@ -32,18 +32,17 @@ except ImportError:
 async def generate_llm_response(prompt: str, provider: str, timeout: int = 30) -> str:
     """
     Generate LLM response. Falls back to mock if not configured.
-    Args:
-        prompt: User input
-        provider: 'openai', 'claude', or 'gemini'
-        timeout: seconds
-    Returns:
-        LLM response string
     """
     provider = provider.lower()
     try:
-        if provider == "openai" and OPENAI_AVAILABLE:
+        if provider == "openai":
+            if not OPENAI_AVAILABLE:
+                logging.warning("OpenAI provider selected but openai package is not installed.")
             api_key = os.getenv("OPENAI_API_KEY")
-            if api_key:
+            if not api_key:
+                logging.warning("OpenAI API key missing from environment.")
+            else:
+                logging.info(f"Using OpenAI with key present.")
                 client = AsyncOpenAI(api_key=api_key)
                 response = await asyncio.wait_for(
                     client.chat.completions.create(
@@ -54,9 +53,14 @@ async def generate_llm_response(prompt: str, provider: str, timeout: int = 30) -
                     timeout=timeout
                 )
                 return response.choices[0].message.content
-        elif provider in ["claude", "anthropic"] and ANTHROPIC_AVAILABLE:
+        elif provider in ["claude", "anthropic"]:
+            if not ANTHROPIC_AVAILABLE:
+                logging.warning("Anthropic provider selected but anthropic package is not installed.")
             api_key = os.getenv("ANTHROPIC_API_KEY")
-            if api_key:
+            if not api_key:
+                logging.warning("Anthropic API key missing from environment.")
+            else:
+                logging.info(f"Using Anthropic with key present.")
                 client = AsyncAnthropic(api_key=api_key)
                 response = await asyncio.wait_for(
                     client.messages.create(
@@ -67,24 +71,31 @@ async def generate_llm_response(prompt: str, provider: str, timeout: int = 30) -
                     timeout=timeout
                 )
                 return response.content[0].text
-        elif provider == "gemini" and GOOGLE_AVAILABLE:
+        elif provider == "gemini":
+            if not GOOGLE_AVAILABLE:
+                logging.warning("Gemini provider selected but google-generativeai is not installed.")
             api_key = os.getenv("GOOGLE_API_KEY")
-            if api_key:
+            if not api_key:
+                logging.warning("Gemini API key missing from environment.")
+            else:
+                logging.info(f"Using Gemini with key present.")
                 genai.configure(api_key=api_key)
-                model = genai.GenerativeModel('gemini-pro')
+                # Use a model that is both accessible and chat-capable for free tier
+                model = genai.GenerativeModel('models/gemini-2.5-flash')
                 response = await asyncio.wait_for(
                     model.generate_content_async(prompt),
                     timeout=timeout
                 )
+                logging.info("Gemini response received.")
                 return str(response.text)
     except asyncio.TimeoutError:
         logging.error(f"LLM request timed out after {timeout}s")
         raise
     except Exception as e:
-        logging.error(f"LLM generation error: {e}")
+        logging.error(f"LLM generation error ({provider}): {e}")
         raise
     # Fallback to mock
-    logging.info(f"Using mock response (API key not configured for {provider})")
+    logging.info(f"Using mock response (provider={provider}, API key(s) or package likely missing)")
     return f"[Mock response] This is a simulated secure response to: {prompt[:50]}..."
 
 def is_llm_configured(provider: str) -> bool:
